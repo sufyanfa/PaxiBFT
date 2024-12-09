@@ -6,6 +6,7 @@ import (
 	"github.com/salemmohammed/PaxiBFT/log"
 	"strconv"
 	"time"
+	"unsafe"
 )
 
 const (
@@ -60,6 +61,7 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
 		}
 	}
 	e = p.log[p.slot]
+	// Ensure that e is used after it's updated
 	e.command = m.Command
 	e.request = &m
 	log.Debugf("p.slot = %v ", p.slot)
@@ -71,6 +73,21 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
 	if p.slot == 0 {
 		fmt.Println("-------------------PBFT-------------------------")
 	}
+
+	// Calculate the size of the Request struct itself
+	requestSize := unsafe.Sizeof(m)
+
+	// Add the size of the Command.Value field if it's a slice
+	if m.Command.Value != nil {
+		requestSize += uintptr(len(m.Command.Value))
+	}
+
+	// Add the size of the Properties map
+	for k, v := range m.Properties {
+		requestSize += uintptr(len(k)) + uintptr(len(v))
+	}
+
+	log.Debugf("Received request of size: %d bytes", requestSize)
 	//w := p.slot % e.Q1.Total() + 1
 	Node_ID := PaxiBFT.ID(strconv.Itoa(1) + "." + strconv.Itoa(1))
 	log.Debugf("Node_ID = %v", Node_ID)

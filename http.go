@@ -3,12 +3,10 @@ package PaxiBFT
 import (
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
-
 	"github.com/salemmohammed/PaxiBFT/log"
 )
 
@@ -73,16 +71,21 @@ func (n *node) handleRoot(w http.ResponseWriter, r *http.Request) {
 		}
 		cmd.Key = Key(i)
 		if r.Method == http.MethodPut || r.Method == http.MethodPost {
-			body, err := ioutil.ReadAll(r.Body)
+			body, err := io.ReadAll(r.Body)
 			if err != nil {
 				log.Error("error reading body: ", err)
 				http.Error(w, "cannot read body", http.StatusBadRequest)
 				return
 			}
-			cmd.Value = Value(body)
+			// Expand the body to 10 KB
+			expandedBody := make([]byte, 10*1024) // 10 KB
+			copy(expandedBody, body)
+			cmd.Value = Value(expandedBody)
+
+			//cmd.Value = Value(body)
 		}
 	} else {
-		body, err := ioutil.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			log.Error("error reading body: ", err)
 			http.Error(w, "cannot read body", http.StatusBadRequest)

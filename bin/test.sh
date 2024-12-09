@@ -41,3 +41,6 @@ gnome-terminal -- bash -c "./server -id 1.3 -algorithm pbft; exec bash"
 gnome-terminal -- bash -c "./server -id 1.4 -algorithm pbft; exec bash"
 
 echo "Servers started"
+
+# run client
+gnome-terminal -- bash -c "./client -id 1.1; exec bash"
