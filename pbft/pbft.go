@@ -286,7 +286,11 @@ func (p *Pbft) exec() {
 			break
 		}
 		value := p.Execute(e.command)
-		log.Debugf("value=%v", value)
+		if len(value) > 0 {
+			log.Debugf("value=%v", value[:min(len(value), 100)])
+		} else {
+			log.Debugf("value is empty")
+		}	
 
 		reply := PaxiBFT.Reply{
 			Command:    e.command,
@@ -306,8 +310,14 @@ func (p *Pbft) exec() {
 			e.request = nil
 			log.Debugf("********* Reply Replicas *********")
 		}
-		// TODO clean up the log periodically
 		delete(p.log, p.execute)
 		p.execute++
 	}
+}
+
+func min(a, b int) int {
+    if a < b {
+        return a
+    }
+    return b
 }
