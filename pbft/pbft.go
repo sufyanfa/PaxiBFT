@@ -5,6 +5,7 @@ import (
 	"github.com/salemmohammed/PaxiBFT"
 	"github.com/salemmohammed/PaxiBFT/log"
 	"time"
+	"bytes"
 )
 
 type status int8
@@ -85,13 +86,17 @@ func GetMD5Hash(r *PaxiBFT.Request) []byte {
 }
 
 func (p *Pbft) HandleRequest(r PaxiBFT.Request, s int) {
-	log.Debugf("<--------------------HandleRequest------------------>")
+    log.Debugf("<--------------------HandleRequest------------------>")
 
-	e := p.log[s]
-	e.Digest = GetMD5Hash(&r)
-	log.Debugf("[p.ballot.ID %v, p.ballot %v ]", p.ballot.ID(), p.ballot)
-	log.Debugf("PrePrepare will be called")
-	p.PrePrepare(&r, &e.Digest, s)
+    e := p.log[s]
+
+    e.Digest = GetMD5Hash(&r)
+    log.Debugf("[p.ballot.ID %v, p.ballot %v ]", p.ballot.ID(), p.ballot)
+    log.Debugf("PrePrepare will be called")
+    
+    p.PrePrepare(nil, &e.Digest, s)
+    
+    log.Debugf("<--------------------EndHandleRequest------------------>")
 }
 
 // Pre_prepare starts phase 1 PrePrepare
@@ -123,65 +128,60 @@ func (p *Pbft) PrePrepare(r *PaxiBFT.Request, s *[]byte, slt int) {
 		ID:         p.ID(),
 		View:       p.view,
 		Slot:       slt,
-		Request:    *r,
 		Digest:     *s,
-		Command:    r.Command,
 	})
 	log.Debugf("++++++ PrePrepare Done ++++++")
 }
 
+
 // HandleP1a handles Pre_prepare message
 func (p *Pbft) HandlePre(m PrePrepare) {
-	log.Debugf("<--------------------HandlePre------------------>")
+    log.Debugf("<--------------------HandlePre------------------>")
 
-	log.Debugf(" Sender  %v ", m.ID)
+    log.Debugf(" Sender  %v ", m.ID)
+    log.Debugf(" m.Slot  %v ", m.Slot)
 
-	log.Debugf(" m.Slot  %v ", m.Slot)
+    if m.Ballot > p.ballot {
+        log.Debugf("m.Ballot > p.ballot")
+        p.ballot = m.Ballot
+        p.view = m.View
+    }
 
-	if m.Ballot > p.ballot {
-		log.Debugf("m.Ballot > p.ballot")
-		p.ballot = m.Ballot
-		p.view = m.View
-	}
+    e, ok := p.log[m.Slot]
+    if !ok {
+        log.Debugf("Create a log")
+        p.log[m.Slot] = &entry{
+            ballot:    p.ballot,
+            view:      p.view,
+            command:   m.Command,
+            commit:    false,
+            active:    false,
+            Leader:    false,
+            request:   &m.Request,
+            timestamp: time.Now(),
+            Digest:    m.Digest,
+            Q1:        PaxiBFT.NewQuorum(),
+            Q2:        PaxiBFT.NewQuorum(),
+            Q3:        PaxiBFT.NewQuorum(),
+            Q4:        PaxiBFT.NewQuorum(),
+        }
+    }
+    e, ok = p.log[m.Slot]
 
-	e, ok := p.log[m.Slot]
-	if !ok {
-		log.Debugf("Create a log")
-		p.log[m.Slot] = &entry{
-			ballot:    p.ballot,
-			view:      p.view,
-			command:   m.Command,
-			commit:    false,
-			active:    false,
-			Leader:    false,
-			request:   &m.Request,
-			timestamp: time.Now(),
-			Digest:    GetMD5Hash(&m.Request),
-			Q1:        PaxiBFT.NewQuorum(),
-			Q2:        PaxiBFT.NewQuorum(),
-			Q3:        PaxiBFT.NewQuorum(),
-			Q4:        PaxiBFT.NewQuorum(),
-		}
-	}
-	e, ok = p.log[m.Slot]
-
-	e.Digest = GetMD5Hash(&m.Request)
-	for i, v := range e.Digest {
-		if v != m.Digest[i] {
-			return
-		}
-	}
-	log.Debugf("m.Ballot=%v , p.ballot=%v, m.view=%v", m.Ballot, p.ballot, m.View)
-	log.Debugf("at the prepare handling")
-	p.Broadcast(Prepare{
-		Ballot:  p.ballot,
-		ID:      p.ID(),
-		View:    m.View,
-		Slot:    m.Slot,
-		Digest:  m.Digest,
-	})
-	log.Debugf("++++++ HandlePre Done ++++++")
+    if bytes.Equal(e.Digest, m.Digest) {
+        log.Debugf("m.Ballot=%v , p.ballot=%v, m.view=%v", m.Ballot, p.ballot, m.View)
+        log.Debugf("at the prepare handling")
+        p.Broadcast(Prepare{
+            Ballot:  p.ballot,
+            ID:      p.ID(),
+            View:    m.View,
+            Slot:    m.Slot,
+            Digest:  m.Digest,
+        })
+    }
+    log.Debugf("++++++ HandlePre Done ++++++")
 }
+
 
 // HandlePrepare starts phase 2 HandlePrepare
 func (p *Pbft) HandlePrepare(m Prepare) {
@@ -191,7 +191,6 @@ func (p *Pbft) HandlePrepare(m Prepare) {
 	log.Debugf("m.slot=%v", m.Slot)
 
 	e, ok := p.log[m.Slot]
-
 	if !ok {
 		log.Debugf("we create a log")
 		p.log[m.Slot] = &entry{
@@ -203,7 +202,7 @@ func (p *Pbft) HandlePrepare(m Prepare) {
 			Leader:    false,
 			request:   &m.Request,
 			timestamp: time.Now(),
-			Digest:    GetMD5Hash(&m.Request),
+			Digest:    m.Digest,
 			Q1:        PaxiBFT.NewQuorum(),
 			Q2:        PaxiBFT.NewQuorum(),
 			Q3:        PaxiBFT.NewQuorum(),
@@ -211,9 +210,10 @@ func (p *Pbft) HandlePrepare(m Prepare) {
 		}
 	}
 	e, ok = p.log[m.Slot]
+
 	e.Q1.ACK(m.ID)
 
-	if e.Q1.Majority(){
+	if e.Q1.Majority() {
 		e.Q1.Reset()
 		e.Pstatus = PREPARED
 		p.Broadcast(Commit{
@@ -224,12 +224,13 @@ func (p *Pbft) HandlePrepare(m Prepare) {
 			Digest:  m.Digest,
 		})
 	}
-	if e.Cstatus == COMMITTED && e.Pstatus == PREPARED && e.Rstatus == RECEIVED{
+	if e.Cstatus == COMMITTED && e.Pstatus == PREPARED && e.Rstatus == RECEIVED {
 		e.commit = true
 		p.exec()
 	}
 	log.Debugf("++++++ HandlePrepare Done ++++++")
 }
+
 
 // HandleCommit starts phase 3
 func (p *Pbft) HandleCommit(m Commit) {
