@@ -85,18 +85,17 @@ func GetMD5Hash(r *PaxiBFT.Request) []byte {
 	return []byte(hasher.Sum(nil))
 }
 
-func (p *Pbft) HandleRequest(r PaxiBFT.Request, s int) {
-    log.Debugf("<--------------------HandleRequest------------------>")
+func (p *Pbft) HandleRequest(digest []byte, s int) {
+	log.Debugf("<--------------------HandleRequest------------------>")
 
-    e := p.log[s]
+	e := p.log[s]
+	e.Digest = digest
+	log.Debugf("[p.ballot.ID %v, p.ballot %v ]", p.ballot.ID(), p.ballot)
+	log.Debugf("PrePrepare will be called")
 
-    e.Digest = GetMD5Hash(&r)
-    log.Debugf("[p.ballot.ID %v, p.ballot %v ]", p.ballot.ID(), p.ballot)
-    log.Debugf("PrePrepare will be called")
-    
-    p.PrePrepare(nil, &e.Digest, s)
-    
-    log.Debugf("<--------------------EndHandleRequest------------------>")
+	p.PrePrepare(nil, &e.Digest, s)
+
+	log.Debugf("<--------------------EndHandleRequest------------------>")
 }
 
 // Pre_prepare starts phase 1 PrePrepare
@@ -136,50 +135,50 @@ func (p *Pbft) PrePrepare(r *PaxiBFT.Request, s *[]byte, slt int) {
 
 // HandleP1a handles Pre_prepare message
 func (p *Pbft) HandlePre(m PrePrepare) {
-    log.Debugf("<--------------------HandlePre------------------>")
+	log.Debugf("<--------------------HandlePre------------------>")
 
-    log.Debugf(" Sender  %v ", m.ID)
-    log.Debugf(" m.Slot  %v ", m.Slot)
+	log.Debugf(" Sender  %v ", m.ID)
+	log.Debugf(" m.Slot  %v ", m.Slot)
 
-    if m.Ballot > p.ballot {
-        log.Debugf("m.Ballot > p.ballot")
-        p.ballot = m.Ballot
-        p.view = m.View
-    }
+	if m.Ballot > p.ballot {
+		log.Debugf("m.Ballot > p.ballot")
+		p.ballot = m.Ballot
+		p.view = m.View
+	}
 
-    e, ok := p.log[m.Slot]
-    if !ok {
-        log.Debugf("Create a log")
-        p.log[m.Slot] = &entry{
-            ballot:    p.ballot,
-            view:      p.view,
-            command:   m.Command,
-            commit:    false,
-            active:    false,
-            Leader:    false,
-            request:   &m.Request,
-            timestamp: time.Now(),
-            Digest:    m.Digest,
-            Q1:        PaxiBFT.NewQuorum(),
-            Q2:        PaxiBFT.NewQuorum(),
-            Q3:        PaxiBFT.NewQuorum(),
-            Q4:        PaxiBFT.NewQuorum(),
-        }
-    }
-    e, ok = p.log[m.Slot]
+	e, ok := p.log[m.Slot]
+	if !ok {
+		log.Debugf("Create a log")
+		p.log[m.Slot] = &entry{
+			ballot:    p.ballot,
+			view:      p.view,
+			command:   m.Command,
+			commit:    false,
+			active:    false,
+			Leader:    false,
+			request:   &m.Request,
+			timestamp: time.Now(),
+			Digest:    m.Digest,
+			Q1:        PaxiBFT.NewQuorum(),
+			Q2:        PaxiBFT.NewQuorum(),
+			Q3:        PaxiBFT.NewQuorum(),
+			Q4:        PaxiBFT.NewQuorum(),
+		}
+	}
+	e, ok = p.log[m.Slot]
 
-    if bytes.Equal(e.Digest, m.Digest) {
-        log.Debugf("m.Ballot=%v , p.ballot=%v, m.view=%v", m.Ballot, p.ballot, m.View)
-        log.Debugf("at the prepare handling")
-        p.Broadcast(Prepare{
-            Ballot:  p.ballot,
-            ID:      p.ID(),
-            View:    m.View,
-            Slot:    m.Slot,
-            Digest:  m.Digest,
-        })
-    }
-    log.Debugf("++++++ HandlePre Done ++++++")
+	if bytes.Equal(e.Digest, m.Digest) {
+		log.Debugf("m.Ballot=%v , p.ballot=%v, m.view=%v", m.Ballot, p.ballot, m.View)
+		log.Debugf("at the prepare handling")
+		p.Broadcast(Prepare{
+			Ballot:  p.ballot,
+			ID:      p.ID(),
+			View:    m.View,
+			Slot:    m.Slot,
+			Digest:  m.Digest,
+		})
+	}
+	log.Debugf("++++++ HandlePre Done ++++++")
 }
 
 
@@ -286,39 +285,44 @@ func (p *Pbft) exec() {
 			log.Debugf("Break")
 			break
 		}
-		value := p.Execute(e.command)
-		if len(value) > 0 {
-			log.Debugf("value=%v", value[:min(len(value), 100)])
-		} else {
-			log.Debugf("value is empty")
-		}	
-
+		
+		// Retrieve the original request using the hash
+		request := p.retrieveRequest(e.Digest)
+		if request == nil {
+			log.Errorf("Failed to retrieve request for digest %v", e.Digest)
+			break
+		}
+		
+		value := p.Execute(request.Command)
+		
 		reply := PaxiBFT.Reply{
-			Command:    e.command,
+			Command:    request.Command,
 			Value:      value,
 			Properties: make(map[string]string),
 		}
 
-		if e.request != nil && e.Leader{
+		if e.request != nil && e.Leader {
 			log.Debugf(" ********* Primary Request ********* %v", *e.request)
 			e.request.Reply(reply)
 			log.Debugf("********* Reply Primary *********")
 			e.request = nil
-		}else{
+		} else if e.request != nil {
 			log.Debugf("********* Replica Request ********* ")
 			log.Debugf("p.ID() =%v", p.ID())
 			e.request.Reply(reply)
-			e.request = nil
 			log.Debugf("********* Reply Replicas *********")
+			e.request = nil
 		}
 		delete(p.log, p.execute)
 		p.execute++
 	}
 }
 
-func min(a, b int) int {
-    if a < b {
-        return a
-    }
-    return b
+func (p *Pbft) retrieveRequest(digest []byte) *PaxiBFT.Request {
+	for _, e := range p.log {
+		if bytes.Equal(e.Digest, digest) {
+			return e.request
+		}   
+	}
+	return nil
 }

@@ -49,7 +49,7 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
 			view:      p.view,
 			command:   m.Command,
 			commit:    false,
-		    active:    false,
+			active:    false,
 			Leader:    false,
 			request:   &m,
 			timestamp: time.Now(),
@@ -64,6 +64,13 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
 	// Ensure that e is used after it's updated
 	e.command = m.Command
 	e.request = &m
+
+	// Calculate the hash of the request
+	digest := GetMD5Hash(&m)
+	
+	// Store the hash in the entry's Digest field
+	e.Digest = digest
+
 	log.Debugf("p.slot = %v ", p.slot)
 	log.Debugf("Key = %v ", m.Command.Key)
 	if e.commit{
@@ -100,7 +107,9 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
 		p.ballot.Next(p.ID())
 		p.view.Next(p.ID())
 		p.requests = append(p.requests, &m)
-		p.Pbft.HandleRequest(m, p.slot)
+		
+		// Pass only the hash to HandleRequest
+		p.Pbft.HandleRequest(e.Digest, p.slot)
 	}
 	e.Rstatus = RECEIVED
 	if e.Cstatus == COMMITTED && e.Pstatus == PREPARED && e.Rstatus == RECEIVED{
