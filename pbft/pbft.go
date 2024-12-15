@@ -108,13 +108,12 @@ func (p *Pbft) PrePrepare(r *PaxiBFT.Request, s *[]byte, slt int) {
 		p.log[p.slot] = &entry{
 			ballot:    p.ballot,
 			view:      p.view,
-			command:   r.Command,
 			commit:    false,
 			active:    false,
 			Leader:    false,
 			request:   r,
 			timestamp: time.Now(),
-			Digest:    GetMD5Hash(r),
+			Digest:    *s,
 			Q1:        PaxiBFT.NewQuorum(),
 			Q2:        PaxiBFT.NewQuorum(),
 			Q3:        PaxiBFT.NewQuorum(),
@@ -152,11 +151,10 @@ func (p *Pbft) HandlePre(m PrePrepare) {
 		p.log[m.Slot] = &entry{
 			ballot:    p.ballot,
 			view:      p.view,
-			command:   m.Command,
 			commit:    false,
 			active:    false,
 			Leader:    false,
-			request:   &m.Request,
+			request:   nil,
 			timestamp: time.Now(),
 			Digest:    m.Digest,
 			Q1:        PaxiBFT.NewQuorum(),
@@ -195,11 +193,10 @@ func (p *Pbft) HandlePrepare(m Prepare) {
 		p.log[m.Slot] = &entry{
 			ballot:    p.ballot,
 			view:      p.view,
-			command:   m.Command,
 			commit:    false,
 			active:    false,
 			Leader:    false,
-			request:   &m.Request,
+			request:   nil,
 			timestamp: time.Now(),
 			Digest:    m.Digest,
 			Q1:        PaxiBFT.NewQuorum(),
@@ -207,8 +204,13 @@ func (p *Pbft) HandlePrepare(m Prepare) {
 			Q3:        PaxiBFT.NewQuorum(),
 			Q4:        PaxiBFT.NewQuorum(),
 		}
+		e, ok = p.log[m.Slot]
 	}
-	e, ok = p.log[m.Slot]
+
+	if !bytes.Equal(e.Digest, m.Digest) {
+		log.Debugf("Received digest does not match stored digest")
+		return
+	}
 
 	e.Q1.ACK(m.ID)
 
