@@ -33,9 +33,14 @@ func NewReplica(id PaxiBFT.ID) *Replica {
 func (p *Replica) handleRequest(m PaxiBFT.Request) {
     log.Debugf("<---------------------handleRequest------------------------->")
     p.slot++
+
+    
+    if p.slot == 0 {
+        fmt.Println("-------------------PBFT-------------------------")
+    }
     
     if p.slot%1000 == 0 {
-        fmt.Print("p.slot", p.slot)
+        fmt.Printf("Processing batch %d, slot %d\n", p.slot/1000, p.slot)
     }
 
     e, ok := p.log[p.slot]
@@ -66,10 +71,6 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
     if e.commit {
         log.Debugf("Executed")
         p.exec()
-    }
-
-    if p.slot == 0 {
-        fmt.Println("-------------------PBFT-------------------------")
     }
 
     requestSize := unsafe.Sizeof(m)

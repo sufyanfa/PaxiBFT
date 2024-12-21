@@ -18,14 +18,12 @@ type PrePrepare struct {
 	ID     		PaxiBFT.ID
 	View 		PaxiBFT.View
 	Slot    	int
-	Request 	PaxiBFT.Request
 	Digest 		[]byte
 	ActiveView	bool
-	Command 	PaxiBFT.Command
 }
 
 func (m PrePrepare) String() string {
-	return fmt.Sprintf("PrePrepare {Ballot=%v , View=%v, slot=%v, Command=%v}", m.Ballot,m.View,m.Slot,m.Command)
+	return fmt.Sprintf("PrePrepare {Ballot=%v , View=%v, slot=%v}", m.Ballot,m.View,m.Slot)
 }
 
 // Prepare message
@@ -35,12 +33,10 @@ type Prepare struct {
 	View   	PaxiBFT.View
 	Slot   	int
 	Digest 	[]byte
-	Command PaxiBFT.Command
-	Request PaxiBFT.Request
 }
 
 func (m Prepare) String() string {
-	return fmt.Sprintf("Prepare {Ballot=%v, ID=%v, View=%v, slot=%v, command=%v}", m.Ballot,m.ID,m.View,m.Slot,m.Command)
+	return fmt.Sprintf("Prepare {Ballot=%v, ID=%v, View=%v, slot=%v}", m.Ballot,m.ID,m.View,m.Slot)
 }
 
 // Commit  message
