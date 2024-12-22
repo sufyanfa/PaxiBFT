@@ -71,7 +71,7 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
 		p.exec()
 	}
 	if p.slot == 0 {
-		fmt.Println("-------------------PBFT-------------------------")
+		fmt.Println("-------------------PBFT ORIGINAL-------------------------")
 	}
 
 	// Calculate the size of the Request struct itself
