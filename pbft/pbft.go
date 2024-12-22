@@ -6,54 +6,65 @@ import (
     "github.com/salemmohammed/PaxiBFT/log"
     "time"
     "bytes"
+    "sync"
 )
 
-// Status represents different states of a request in the PBFT protocol
+// Status represents different states of a request
 type status int8
 
 const (
-    NONE status = iota        // Initial state
-    PREPREPARED              // Request has been pre-prepared
-    PREPARED                 // Request has been prepared
-    COMMITTED               // Request has been committed
-    RECEIVED                // Request has been received
+    NONE status = iota
+    PREPREPARED
+    PREPARED
+    COMMITTED
+    RECEIVED
 )
 
-// Entry represents a log entry for tracking request state
+// BackgroundTransfer handles asynchronous data transmission
+type BackgroundTransfer struct {
+    data     chan *PaxiBFT.Request
+    pending  map[string]*PaxiBFT.Request
+    mu       sync.RWMutex
+}
+
+// Entry represents a log entry for request processing
 type entry struct {
-    ballot    PaxiBFT.Ballot       // Current ballot number
-    view      PaxiBFT.View         // Current view number
-    command   PaxiBFT.Command      // Client command to execute
-    commit    bool                 // Whether entry is committed
-    active    bool                 // Whether view is active
-    Leader    bool                 // Whether this node is leader
-    request   *PaxiBFT.Request     // Original client request
-    timestamp time.Time            // Time request was received
-    Digest    []byte               // Hash of request data
-    Q1        *PaxiBFT.Quorum     // Quorum for PrePrepare phase
-    Q2        *PaxiBFT.Quorum     // Quorum for Prepare phase
-    Q3        *PaxiBFT.Quorum     // Quorum for Commit phase
-    Q4        *PaxiBFT.Quorum     // Additional quorum if needed
-    Pstatus   status              // Prepare status
-    Cstatus   status              // Commit status 
-    Rstatus   status              // Received status
+    ballot    PaxiBFT.Ballot
+    view      PaxiBFT.View
+    command   PaxiBFT.Command
+    commit    bool
+    active    bool
+    Leader    bool
+    request   *PaxiBFT.Request
+    timestamp time.Time
+    Digest    []byte
+    Q1        *PaxiBFT.Quorum
+    Q2        *PaxiBFT.Quorum
+    Q3        *PaxiBFT.Quorum
+    Q4        *PaxiBFT.Quorum
+    Pstatus   status
+    Cstatus   status
+    Rstatus   status
+    dataChan  chan struct{}
 }
 
 // Pbft represents the main PBFT protocol instance
 type Pbft struct {
-    PaxiBFT.Node                   // Embedded Node type
-    config          []PaxiBFT.ID   // Node configuration
-    N               PaxiBFT.Config // Network configuration
-    log             map[int]*entry // Log of requests/operations
-    slot            int            // Current sequence number
-    view            PaxiBFT.View   // Current view number
-    ballot          PaxiBFT.Ballot // Current ballot number
-    execute         int            // Next execution sequence
-    requests        []*PaxiBFT.Request // Pending requests
-    quorum          *PaxiBFT.Quorum   // Quorum tracker
-    ReplyWhenCommit bool              // Reply policy flag
-    RecivedReq      bool              // Request received flag
-    Member          *PaxiBFT.Memberlist // Member list
+    PaxiBFT.Node
+    config          []PaxiBFT.ID
+    N               PaxiBFT.Config
+    log             map[int]*entry
+    slot            int
+    view            PaxiBFT.View
+    ballot          PaxiBFT.Ballot
+    execute         int
+    requests        []*PaxiBFT.Request
+    quorum          *PaxiBFT.Quorum
+    backgroundTx    *BackgroundTransfer
+    ReplyWhenCommit bool
+    RecivedReq      bool
+    Member          *PaxiBFT.Memberlist
+    dataLock        sync.RWMutex
 }
 
 // NewPbft creates and initializes a new PBFT instance
@@ -67,31 +78,72 @@ func NewPbft(n PaxiBFT.Node, options ...func(*Pbft)) *Pbft {
         ReplyWhenCommit: false,
         RecivedReq:      false,
         Member:          PaxiBFT.NewMember(),
+        backgroundTx:    &BackgroundTransfer{
+            data:    make(chan *PaxiBFT.Request, 1000),
+            pending: make(map[string]*PaxiBFT.Request),
+        },
     }
-    // Apply any custom options
+
     for _, opt := range options {
         opt(p)
     }
     return p
 }
 
-// GetMD5Hash generates MD5 hash of request data for integrity checking
+// GetMD5Hash generates MD5 hash of request data
 func GetMD5Hash(r *PaxiBFT.Request) []byte {
     hasher := md5.New()
     hasher.Write([]byte(r.Command.Value))
     return hasher.Sum(nil)
 }
 
-// HandleRequest initiates request processing by creating PrePrepare message
+// HandleRequest processes new requests with background data transmission
 func (p *Pbft) HandleRequest(r PaxiBFT.Request, s int) {
     log.Debugf("<--------------------HandleRequest------------------>")
     e := p.log[s]
-    e.Digest = GetMD5Hash(&r)
+    digest := GetMD5Hash(&r)
+    e.Digest = digest
+
+    // Start background data transmission
+    go p.sendDataInBackground(&r, s)
+
+    // Send PrePrepare with hash only
     p.PrePrepare(&r, s)
     log.Debugf("<--------------------EndHandleRequest------------------>")
 }
 
-// PrePrepare starts the consensus process by broadcasting PrePrepare message
+// sendDataInBackground handles asynchronous data transmission
+func (p *Pbft) sendDataInBackground(r *PaxiBFT.Request, slot int) {
+    dataMsg := DataMessage{
+        ID:      p.ID(),
+        Slot:    slot,
+        Request: r,
+        Digest:  GetMD5Hash(r),
+    }
+
+    // Send to all replicas except self
+    for _, id := range p.config {
+        if id != p.ID() {
+            go func(target PaxiBFT.ID) {
+                // Try sending with timeout
+                done := make(chan bool)
+                go func() {
+                    p.Send(target, dataMsg)
+                    done <- true
+                }()
+
+                select {
+                case <-done:
+                    log.Debugf("Data sent to %v for slot %d", target, slot)
+                case <-time.After(time.Second):
+                    log.Warningf("Timeout sending data to %v for slot %d", target, slot)
+                }
+            }(id)
+        }
+    }
+}
+
+// PrePrepare initiates the consensus process
 func (p *Pbft) PrePrepare(r *PaxiBFT.Request, slot int) {
     log.Debugf("<--------------------PrePrepare------------------>")
     p.Broadcast(PrePrepare{
@@ -104,22 +156,19 @@ func (p *Pbft) PrePrepare(r *PaxiBFT.Request, slot int) {
     log.Debugf("++++++ PrePrepare Done ++++++")
 }
 
-// HandlePre processes PrePrepare messages and initiates Prepare phase
+// HandlePre processes PrePrepare messages
 func (p *Pbft) HandlePre(m PrePrepare) {
     log.Debugf("<--------------------HandlePre------------------>")
     log.Debugf(" Sender  %v ", m.ID)
     log.Debugf(" m.Slot  %v ", m.Slot)
 
-    // Update ballot and view if needed
     if m.Ballot > p.ballot {
         p.ballot = m.Ballot
         p.view = m.View
     }
 
-    // Create or get log entry
     e, ok := p.log[m.Slot]
     if !ok {
-        // Create new entry if doesn't exist
         p.log[m.Slot] = &entry{
             ballot:    p.ballot,
             view:      p.view,
@@ -132,13 +181,12 @@ func (p *Pbft) HandlePre(m PrePrepare) {
             Q2:        PaxiBFT.NewQuorum(),
             Q3:        PaxiBFT.NewQuorum(),
             Q4:        PaxiBFT.NewQuorum(),
+            dataChan:  make(chan struct{}),
         }
         e = p.log[m.Slot]
     }
 
-    // Verify digest and broadcast Prepare
     if e != nil && (e.Digest == nil || bytes.Equal(e.Digest, m.Digest)) {
-        log.Debugf("m.Ballot=%v, p.ballot=%v, m.view=%v", m.Ballot, p.ballot, m.View)
         log.Debugf("Broadcasting Prepare message")
         p.Broadcast(Prepare{
             Ballot:  p.ballot,
@@ -151,14 +199,13 @@ func (p *Pbft) HandlePre(m PrePrepare) {
     log.Debugf("++++++ HandlePre Done ++++++")
 }
 
-// HandlePrepare processes Prepare messages and moves to Commit phase if quorum reached
+// HandlePrepare processes Prepare messages
 func (p *Pbft) HandlePrepare(m Prepare) {
     log.Debugf("<--------------------HandlePrepare------------------>")
     log.Debugf(" Sender  %v ", m.ID)
     log.Debugf("p.slot=%v", p.slot)
     log.Debugf("m.slot=%v", m.Slot)
 
-    // Create or get log entry
     e, ok := p.log[m.Slot]
     if !ok {
         p.log[m.Slot] = &entry{
@@ -173,6 +220,7 @@ func (p *Pbft) HandlePrepare(m Prepare) {
             Q2:        PaxiBFT.NewQuorum(),
             Q3:        PaxiBFT.NewQuorum(),
             Q4:        PaxiBFT.NewQuorum(),
+            dataChan:  make(chan struct{}),
         }
         e = p.log[m.Slot]
     }
@@ -190,6 +238,8 @@ func (p *Pbft) HandlePrepare(m Prepare) {
                 Digest:  m.Digest,
             })
         }
+        
+        // Check if we can execute
         if e.Cstatus == COMMITTED && e.Pstatus == PREPARED && e.Rstatus == RECEIVED {
             e.commit = true
             p.exec()
@@ -198,42 +248,67 @@ func (p *Pbft) HandlePrepare(m Prepare) {
     log.Debugf("++++++ HandlePrepare Done ++++++")
 }
 
-// HandleCommit processes Commit messages and executes command if commit quorum reached
+// HandleCommit processes Commit messages
 func (p *Pbft) HandleCommit(m Commit) {
     log.Debugf("<--------------------HandleCommit------------------>")
-    // Skip if already executed
     if p.execute > m.Slot {
         return
     }
 
-    // Get or validate log entry
     e, ok := p.log[m.Slot]
-    if !ok {
+    if !ok || e == nil {
         return
     }
 
-    // Track commit acknowledgments
     e.Q2.ACK(m.ID)
     if e.Q2.Majority() {
         e.Cstatus = COMMITTED
-        // Execute if all conditions met
         if e.Pstatus == PREPARED && e.Rstatus == RECEIVED {
+            e.commit = true
+            p.exec()
+        }
+    }
+    log.Debugf("++++++ HandleCommit Done ++++++")
+}
+
+// HandleDataMessage processes data messages received in background
+func (p *Pbft) HandleDataMessage(m DataMessage) {
+    p.dataLock.Lock()
+    defer p.dataLock.Unlock()
+
+    // Verify digest
+    if digest := GetMD5Hash(m.Request); !bytes.Equal(digest, m.Digest) {
+        log.Warningf("Data message digest mismatch for slot %d", m.Slot)
+        return
+    }
+
+    // Update log entry with received data
+    if e, exists := p.log[m.Slot]; exists {
+        e.request = m.Request
+        e.command = m.Request.Command
+        e.Rstatus = RECEIVED
+
+        // Signal data reception
+        if e.dataChan != nil {
+            close(e.dataChan)
+        }
+
+        // Check if we can execute
+        if e.Cstatus == COMMITTED && e.Pstatus == PREPARED {
             e.commit = true
             p.exec()
         }
     }
 }
 
-// exec executes all committed commands in order
+// exec executes committed requests in order
 func (p *Pbft) exec() {
     for {
-        // Get next entry to execute
         e, ok := p.log[p.execute]
         if !ok || !e.commit {
             break
         }
-        
-        // Execute command and send reply
+
         if e.request != nil {
             value := p.Execute(e.command)
             reply := PaxiBFT.Reply{
@@ -241,17 +316,17 @@ func (p *Pbft) exec() {
                 Value:     value,
                 Properties: make(map[string]string),
             }
-            
-            // Send reply to client
-            if e.request != nil && e.Leader {
-                e.request.Reply(reply)
-            } else {
-                e.request.Reply(reply)
+
+            if e.request != nil {
+                if e.Leader {
+                    e.request.Reply(reply)
+                } else {
+                    e.request.Reply(reply)
+                }
+                e.request = nil
             }
-            e.request = nil
         }
-        
-        // Cleanup and advance execution counter
+
         delete(p.log, p.execute)
         p.execute++
     }

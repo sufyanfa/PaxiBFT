@@ -1,65 +1,68 @@
 package pbft
+
 import (
     "encoding/gob"
     "fmt"
     "github.com/salemmohammed/PaxiBFT"
 )
 
-// init registers message types for serialization using the gob package
-// This is necessary for network communication between nodes
+// init registers message types for serialization
 func init() {
     gob.Register(PrePrepare{})
     gob.Register(Prepare{})
     gob.Register(Commit{})
+    gob.Register(DataMessage{})
 }
 
-// PrePrepare represents the first phase message in PBFT protocol
-// Sent by the primary/leader to all backup replicas
+// DataMessage represents a background data transmission message
+type DataMessage struct {
+    ID      PaxiBFT.ID          // ID of the sending node
+    Slot    int                 // Sequence number
+    Request *PaxiBFT.Request    // Full request data
+    Digest  []byte              // Hash for verification
+}
+
+// PrePrepare represents the first phase message
 type PrePrepare struct {
-    Ballot      PaxiBFT.Ballot  // Current ballot number for ordering
+    Ballot      PaxiBFT.Ballot  // Current ballot number
     ID          PaxiBFT.ID      // ID of the sending node
     View        PaxiBFT.View    // Current view number
-    Slot        int             // Sequence number for this request
-    Digest      []byte          // Hash/digest of the request
-    ActiveView  bool            // Indicates if this view is active
+    Slot        int             // Sequence number
+    Digest      []byte          // Hash of the request
+    ActiveView  bool            // View status
 }
 
-// String returns a formatted string representation of PrePrepare message
-// Used for logging and debugging
 func (m PrePrepare) String() string {
-    return fmt.Sprintf("PrePrepare {Ballot=%v , View=%v, slot=%v}", m.Ballot,m.View,m.Slot)
+    return fmt.Sprintf("PrePrepare {Ballot=%v, View=%v, slot=%v}", 
+        m.Ballot, m.View, m.Slot)
 }
 
-// Prepare represents the second phase message in PBFT protocol
-// Sent by replicas to all other replicas to show agreement on request
+// Prepare represents the second phase message
 type Prepare struct {
-    Ballot  PaxiBFT.Ballot  // Current ballot number
-    ID      PaxiBFT.ID      // ID of the sending node
-    View    PaxiBFT.View    // Current view number
-    Slot    int             // Sequence number for this request
-    Digest  []byte          // Hash/digest of the request
+    Ballot  PaxiBFT.Ballot
+    ID      PaxiBFT.ID
+    View    PaxiBFT.View
+    Slot    int
+    Digest  []byte
 }
 
-// String returns a formatted string representation of Prepare message
-// Used for logging and debugging
 func (m Prepare) String() string {
-    return fmt.Sprintf("Prepare {Ballot=%v, ID=%v, View=%v, slot=%v}", m.Ballot,m.ID,m.View,m.Slot)
+    return fmt.Sprintf("Prepare {Ballot=%v, ID=%v, View=%v, slot=%v}", 
+        m.Ballot, m.ID, m.View, m.Slot)
 }
 
-// Commit represents the final phase message in PBFT protocol
-// Sent by replicas to all other replicas to commit the request
+// Commit represents the final phase message
 type Commit struct {
-    Ballot   PaxiBFT.Ballot    // Current ballot number
-    ID       PaxiBFT.ID        // ID of the sending node
-    View     PaxiBFT.View      // Current view number
-    Slot     int               // Sequence number for this request
-    Digest   []byte            // Hash/digest of the request
-    Command  PaxiBFT.Command   // The actual command to be executed
-    Request  PaxiBFT.Request   // Original client request
+    Ballot   PaxiBFT.Ballot
+    ID       PaxiBFT.ID
+    View     PaxiBFT.View
+    Slot     int
+    Digest   []byte
+    Command  PaxiBFT.Command
+    Request  PaxiBFT.Request
 }
 
-// String returns a formatted string representation of Commit message
-// Used for logging and debugging
 func (m Commit) String() string {
-    return fmt.Sprintf("Commit {Ballot=%v, ID=%v, View=%v, Slot=%v, command=%v}", m.Ballot,m.ID,m.View,m.Slot, m.Command)
+    return fmt.Sprintf("Commit {Ballot=%v, ID=%v, View=%v, Slot=%v, command=%v}", 
+        m.Ballot, m.ID, m.View, m.Slot, m.Command)
 }

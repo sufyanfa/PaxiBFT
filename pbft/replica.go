@@ -1,5 +1,5 @@
-// Package pbft implements a replica node in PBFT consensus protocol
 package pbft
+
 import (
     "fmt"
     "github.com/salemmohammed/PaxiBFT"
@@ -10,33 +10,31 @@ import (
 )
 
 // Replica represents a node in the PBFT network
-// It extends the basic Node type and includes PBFT-specific functionality
 type Replica struct {
     PaxiBFT.Node    // Embedded Node type for basic node functionality
     *Pbft           // Pointer to PBFT protocol instance
 }
 
 // NewReplica creates and initializes a new replica instance
-// id: unique identifier for the replica
 func NewReplica(id PaxiBFT.ID) *Replica {
     r := new(Replica)
     r.Node = PaxiBFT.NewNode(id)
     r.Pbft = NewPbft(r)
     
-    // Register message handlers for different types of PBFT messages
+    // Register message handlers
     r.Register(PaxiBFT.Request{}, r.handleRequest)
     r.Register(PrePrepare{}, r.HandlePre)
     r.Register(Prepare{}, r.HandlePrepare)
     r.Register(Commit{}, r.HandleCommit)
+    r.Register(DataMessage{}, r.HandleDataMessage)
     
     return r
 }
 
 // handleRequest processes incoming client requests
-// This is the main entry point for new requests in the system
 func (p *Replica) handleRequest(m PaxiBFT.Request) {
     log.Debugf("<---------------------handleRequest------------------------->")
-    p.slot++ // Increment sequence number
+    p.slot++
 
     // Print initial PBFT message for first request
     if p.slot == 0 {
@@ -51,36 +49,29 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
     // Create or get the log entry for this slot
     e, ok := p.log[p.slot]
     if !ok {
-        // Initialize new log entry with request details
+        // Initialize new log entry
         p.log[p.slot] = &entry{
-            ballot:    p.ballot,        // Current ballot number
-            view:      p.view,          // Current view number
-            command:   m.Command,        // Client command
-            commit:    false,           // Commit flag
-            active:    false,           // Active view flag
-            Leader:    false,           // Leader flag
-            request:   &m,              // Original request
-            timestamp: time.Now(),      // Request timestamp
-            Digest:    GetMD5Hash(&m),  // Request hash
-            // Initialize quorums for different phases
+            ballot:    p.ballot,
+            view:      p.view,
+            command:   m.Command,
+            commit:    false,
+            active:    false,
+            Leader:    false,
+            request:   &m,
+            timestamp: time.Now(),
+            Digest:    GetMD5Hash(&m),
             Q1:        PaxiBFT.NewQuorum(),
             Q2:        PaxiBFT.NewQuorum(),
             Q3:        PaxiBFT.NewQuorum(),
             Q4:        PaxiBFT.NewQuorum(),
+            dataChan:  make(chan struct{}),
         }
+        e = p.log[p.slot]
     }
-    e = p.log[p.slot]
+
+    // Update entry with request details
     e.command = m.Command
     e.request = &m
-
-    log.Debugf("p.slot = %v ", p.slot)
-    log.Debugf("Key = %v ", m.Command.Key)
-    
-    // Execute if already committed
-    if e.commit {
-        log.Debugf("Executed")
-        p.exec()
-    }
 
     // Calculate request size for monitoring
     requestSize := unsafe.Sizeof(m)
@@ -90,30 +81,48 @@ func (p *Replica) handleRequest(m PaxiBFT.Request) {
     for k, v := range m.Properties {
         requestSize += uintptr(len(k)) + uintptr(len(v))
     }
-    log.Debugf("Received request of size: %d bytes", requestSize)
+    log.Debugf("Request size: %d bytes", requestSize)
 
-    // Check if this replica is the leader for this view
+    // Check if this replica is the leader
     Node_ID := PaxiBFT.ID(strconv.Itoa(1) + "." + strconv.Itoa(1))
     log.Debugf("Node_ID = %v", Node_ID)
     
     if Node_ID == p.ID() {
+        log.Debugf("Acting as view leader: %v", p.ID())
         e.active = true
-    }
-    
-    // Leader specific handling
-    if e.active {
-        log.Debugf("The view leader : %v ", p.ID())
         e.Leader = true
-        p.ballot.Next(p.ID())     // Advance ballot
-        p.view.Next(p.ID())       // Advance view
+        p.ballot.Next(p.ID())
+        p.view.Next(p.ID())
         p.requests = append(p.requests, &m)
+        
+        // Leader initiates consensus with background data transmission
         p.Pbft.HandleRequest(m, p.slot)
+    } else {
+        // Non-leader nodes wait for data if needed
+        if e.request == nil {
+            select {
+            case <-e.dataChan:
+                log.Debugf("Received data for slot %d", p.slot)
+            case <-time.After(5 * time.Second):
+                log.Warningf("Timeout waiting for data in slot %d", p.slot)
+                return
+            }
+        }
     }
-    
-    // Update request status and check for execution
+
+    // Handle execution if already committed
+    if e.commit {
+        log.Debugf("Request already committed, executing")
+        p.exec()
+        return
+    }
+
+    // Update request status and check for execution conditions
     e.Rstatus = RECEIVED
-    if e.Cstatus == COMMITTED && e.Pstatus == PREPARED && e.Rstatus == RECEIVED {
+    if e.Cstatus == COMMITTED && e.Pstatus == PREPARED {
         e.commit = true
         p.exec()
     }
+    
+    log.Debugf("Request processing complete for slot %d", p.slot)
 }
